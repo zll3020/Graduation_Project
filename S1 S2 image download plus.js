@@ -1,8 +1,8 @@
-// 定义沉湖国际重要湿地的几何区域
+// 区域定义（请在GEE代码编辑器中定义 geometry 变量）
 var studyarea = geometry;
-Map.addLayer(studyarea, {}, '沉湖国际重要湿地');
+Map.addLayer(studyarea, {}, '研究区');
 
-// Sentinel-2 云掩膜函数（适用于 Level-2A 数据）
+// Sentinel-2 云掩膜函数（适用于 Level-2A）
 function maskS2clouds(image) {
   var cloudProbability = image.select('MSK_CLDPRB');
   var sceneClassification = image.select('SCL');
@@ -14,8 +14,7 @@ function maskS2clouds(image) {
   return image.updateMask(mask);
 }
 
-// 计算水体指数（NDWI）
-// 此时还未重命名波段，用原始S2波段名
+// 计算NDWI
 function addWaterIndex(image) {
   var ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI');
   return image.addBands(ndwi);
@@ -35,60 +34,61 @@ function normalize(image, band) {
   return image.addBands(norm);
 }
 
-// 由于 GEE 不支持 for 循环批量导出，这里推荐用列表循环
+// 配对每月S2和S1，并导出
 var months = ee.List.sequence(1, 12);
 var year = 2024;
 
-// 注意：批量导出任务建议每次只运行一个月，避免GEE任务队列溢出
+// 建议在GEE中每次运行一个月，避免导出任务过多
 months.getInfo().forEach(function(month) {
   month = parseInt(month);
   var startDate = ee.Date.fromYMD(year, month, 1);
   var endDate = startDate.advance(1, 'month');
 
-  // Sentinel-2 数据处理
-  var s2Dataset = ee.ImageCollection('COPERNICUS/S2_SR')
+  // 查找该月所有S2，按云量升序
+  var s2Candidates = ee.ImageCollection('COPERNICUS/S2_SR')
     .filterBounds(studyarea)
     .filterDate(startDate, endDate)
     .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
     .map(maskS2clouds)
     .map(addWaterIndex)
-    .map(function(image) {
-      // 先重命名4个主波段
-      return image
-        .select(['B2', 'B3', 'B4', 'B8', 'NDWI'], ['Blue', 'Green', 'Red', 'NIR', 'NDWI'])
-        .divide(10000)
-        .toFloat();
-    });
+    .sort('CLOUDY_PIXEL_PERCENTAGE');
 
-  // Sentinel-1 数据处理
-  var s1Dataset = ee.ImageCollection('COPERNICUS/S1_GRD')
+  // 取云量最低的S2影像
+  var s2Best = ee.Image(s2Candidates.first());
+  var s2Date = ee.Date(s2Best.get('system:time_start'));
+
+  // 查找与S2采集日期间隔不超过14天的S1，按时间距离排序
+  var s1Candidates = ee.ImageCollection('COPERNICUS/S1_GRD')
     .filterBounds(studyarea)
-    .filterDate(startDate, endDate)
+    .filterDate(s2Date.advance(-14, 'day'), s2Date.advance(14, 'day'))
     .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
     .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
     .filter(ee.Filter.eq('instrumentMode', 'IW'))
-    .map(function(image) {
-      return image.select(['VV', 'VH']).toFloat();
-    });
+    .map(function(img) {
+      // 计算与S2的日期差（绝对值，单位：天）
+      var diff = ee.Number(ee.Date(img.get('system:time_start')).difference(s2Date, 'day')).abs();
+      return img.set('diffDays', diff);
+    })
+    .sort('diffDays');
 
-  // 取中值影像
-  var s2Image = s2Dataset.median().clip(studyarea);
-  var s1Image = s1Dataset.median().clip(studyarea);
+  var s1Best = ee.Image(s1Candidates.first());
 
-  // 归一化NDWI波段
-  var s2ImageNorm = normalize(s2Image, 'NDWI');
+  // 对S2 NDWI归一化
+  var s2BestNorm = normalize(s2Best, 'NDWI');
 
-  // 导出，每月数据建议手动运行，否则会有任务队列上限限制
+  // 导出S2 NDWI_norm
   Export.image.toDrive({
-    image: s2ImageNorm.select('NDWI_norm'),
+    image: s2BestNorm.select('NDWI_norm'),
     description: 'S2_NDWI_norm_' + year + '_' + month,
     region: studyarea,
     scale: 10,
     maxPixels: 1e13,
     fileFormat: 'GeoTIFF'
   });
+
+  // 导出配对的S1（VV/VH）
   Export.image.toDrive({
-    image: s1Image.select(['VV', 'VH']),
+    image: s1Best.select(['VV', 'VH']),
     description: 'S1_' + year + '_' + month,
     region: studyarea,
     scale: 10,
