@@ -76,15 +76,17 @@ months.getInfo().forEach(function(month) {
   // 对S2 NDWI归一化
   var s2BestNorm = normalize(s2Best, 'NDWI');
 
-  // 导出S2 NDWI_norm
-  Export.image.toDrive({
-    image: s2BestNorm.select('NDWI_norm'),
-    description: 'S2_NDWI_norm_' + year + '_' + month,
-    region: studyarea,
-    scale: 10,
-    maxPixels: 1e13,
-    fileFormat: 'GeoTIFF'
-  });
+  // 导出S2 所有水色相关波段（B1~B8A）及归一化NDWI，并统一为float32
+Export.image.toDrive({
+  image: s2BestNorm.select([
+    'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B8A', 'NDWI_norm'
+  ]).toFloat(),
+  description: 'S2_allbands_NDWI_norm_' + year + '_' + month,
+  region: studyarea,
+  scale: 10,
+  maxPixels: 1e13,
+  fileFormat: 'GeoTIFF'
+});
 
   // 导出配对的S1（VV/VH）
   Export.image.toDrive({
