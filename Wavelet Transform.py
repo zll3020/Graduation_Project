@@ -49,6 +49,9 @@ with rasterio.open(r"D:\Envi\ENVI56\data\沉湖数据\沉湖S1\S1_2024_4.tif") a
         dst_crs=profile['crs'],
         resampling=Resampling.bilinear
     )
+# 保存重采样后的SAR影像
+with rasterio.open(r'D:\Envi\ENVI56\data\沉湖数据\4m\SAR_resampled.tif', 'w', **profile) as dst:
+    dst.write(sar.astype(profile['dtype']), 1)
 
 #小波分解
 # 选择小波类型和分解级数
